@@ -1,19 +1,23 @@
 package generator
 
 import (
+	"bytes"
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
+	"text/template"
+
+	_ "embed" // embed template file
 
 	"github.com/goccy/go-json"
-	_ "github.com/lib/pq"
 	"github.com/rs/zerolog"
+	"golang.org/x/tools/imports"
 )
+
+//go:embed types.tmpl
+var structTemplate string
 
 const (
 	// DefaultPackageName is the default package name for the generated Go file
@@ -27,104 +31,104 @@ const (
 )
 
 type Generator struct {
-	logger  zerolog.Logger
-	pkg     string
-	inPath  string
-	outPath string
+	logger   zerolog.Logger
+	pkg      string
+	inPath   string
+	outPath  string
+	template *template.Template
 }
 
-func New(logger zerolog.Logger, pkg string, path string, outDir string, outFile string) (*Generator, error) {
-	if err := os.Mkdir(outDir, 0700); os.IsNotExist(err) {
+func New(logger zerolog.Logger, pkg, path, outDir, outFile string) (*Generator, error) {
+	if err := os.Mkdir(filepath.Clean(outDir), 0700); os.IsNotExist(err) {
 		if err != nil {
 			logger.Err(err).Msg("failed to create output directory")
 			return nil, err
 		}
 	}
 
+	tmpl, err := template.New("").Parse(structTemplate)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Generator{
-		logger:  logger,
-		pkg:     pkg,
-		inPath:  path,
-		outPath: filepath.Join(outDir, outFile),
+		logger:   logger,
+		pkg:      pkg,
+		inPath:   path,
+		outPath:  filepath.Join(filepath.Clean(outDir), filepath.Clean(outFile)),
+		template: tmpl,
 	}, nil
 }
 
+type TemplData struct {
+	PackageName string
+	Methods     []Method
+}
+
+type Arguments struct {
+	CapitalName          string
+	Name                 string
+	Type                 string
+	GoType               string
+	TypeDataStructMethod string
+}
+
+type Method struct {
+	Name      string
+	Arguments []Arguments
+	Alias     string
+}
+
 func (g *Generator) Execute(ctx context.Context) error {
-	tf, err := os.Create(g.outPath)
+	typesJSON, err := os.ReadFile(filepath.Clean(g.inPath))
 	if err != nil {
-		g.logger.Fatal().Err(err).Msg("failed to create output file")
-	}
-
-	jsonFile, err := os.Open(g.inPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			g.logger.Err(err).Msg(fmt.Sprintf("%s not found", g.inPath))
-			return err
-		}
-		g.logger.Err(err).Msg(fmt.Sprintf("failed to open eip712 types file: %s", g.inPath))
-		return err
-	}
-	defer jsonFile.Close()
-
-	jsonB, err := io.ReadAll(jsonFile)
-	if err != nil {
-		g.logger.Err(err).Msg("failed to read eip712 types file")
 		return err
 	}
 
-	var result map[string]interface{}
-	if err := json.Unmarshal(jsonB, &result); err != nil {
-		g.logger.Err(err).Msg("failed to unmarshal eip712 types json")
+	var eip712Types map[string][]Arguments
+	if err := json.Unmarshal(typesJSON, &eip712Types); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(tf, "package registry\n\n")
-	for structName, detailsArray := range result {
-		alias := strings.ToLower(structName[:1])
+	tdata := TemplData{
+		PackageName: g.pkg,
+	}
 
-		solSig := fmt.Sprintf("//%s(", structName)
-		structAttrs := fmt.Sprintf("type %s struct {\n", structName)
-		typeFunc := fmt.Sprintf(`func (%s *%s) Type() []apitypes.Type {return []apitypes.Type{`, alias, structName)
-		messageFunc := fmt.Sprintf(`func (%s *%s) Message() apitypes.TypedDataMessage {return apitypes.TypedDataMessage{`, alias, structName)
-		for _, args := range detailsArray.([]interface{}) {
-			argName, argNameOk := args.(map[string]interface{})["name"].(string)
-			argType, argTypeOk := args.(map[string]interface{})["type"].(string)
-			if !argNameOk || !argTypeOk {
-				g.logger.Err(fmt.Errorf("failed to parse args for %s", structName)).Msg("failed to parse args for struct")
-				return err
-			}
-
-			solSig += fmt.Sprintf("%s %s,", argType, argName)
-			upperArgName := strings.ToUpper(argName[:1]) + argName[1:]
-			typeFunc += fmt.Sprintf(`{Name: "%s", Type: "%s"},`, argName, argType)
-			messageFunc += fmt.Sprintf(`"%s": %s,`, argName, fmt.Sprintf(typedDataStructMap[argType], alias, upperArgName))
-			structAttrs += fmt.Sprintf("%s %s `json:\"%s\"`\n", upperArgName, solidityToGolangTypesMap[argType], argName)
+	for k, v := range eip712Types {
+		m := Method{
+			Name:  k,
+			Alias: strings.ToLower(k[:1]),
 		}
 
-		solSig = strings.TrimRight(solSig, ",") + ")"
-		typeFunc += "}}\n\n"
-		messageFunc += "}}\n\n"
+		for _, arg := range v {
+			arg.CapitalName = strings.ToUpper(arg.Name[:1]) + arg.Name[1:]
+			arg.GoType = solidityToGolangTypesMap[arg.Type]
+			arg.TypeDataStructMethod = fmt.Sprintf(typedDataStructMap[arg.Type], m.Alias, arg.CapitalName)
+			m.Arguments = append(m.Arguments, arg)
+		}
 
-		fmt.Fprint(tf, solSig+"\n"+structAttrs+"\n")
-		fmt.Fprint(tf, "}\n\n"+fmt.Sprintf(`func (%s *%s) Name() string {return "%s"}`, alias, structName, structName)+"\n\n")
-		typedDataHash := fmt.Sprintf("func (%s *%s) TypedDataAndHash(domain apitypes.TypedDataDomain) ([]byte, error) {\ntd := &apitypes.TypedData {\nTypes: apitypes.Types{\n\t\"EIP712Domain\": []apitypes.Type{\n\t\t{Name: \"name\", Type: \"string\"},\n{Name: \"version\", Type: \"string\"},\n{Name: \"chainId\", Type: \"uint256\"},\n{Name: \"verifyingContract\", Type: \"address\"},\n}, %s.Name(): %s.Type(),\n},\nPrimaryType: %s.Name(),\nDomain: domain,\nMessage: %s.Message()}\nhash, _, err := apitypes.TypedDataAndHash(*td)\nreturn hash, err}\n\n", alias, structName, alias, alias, alias, alias)
-		fmt.Fprint(tf, typeFunc)
-		fmt.Fprint(tf, messageFunc)
-		fmt.Fprint(tf, typedDataHash)
+		tdata.Methods = append(tdata.Methods, m)
 
 	}
 
-	fmt.Fprint(tf, "func anySlice[A any](v []A) []any {\nn := len(v)\nout := make([]any, n)\nfor i := 0; i < n; i++ {\nout[i] = v[i]\n}\n\nreturn out\n}\n\n")
-
-	if err := exec.Command("gofmt", "-w", g.outPath).Run(); err != nil {
-		g.logger.Err(err).Msg("failed to run gofmt")
-	}
-	if err := exec.Command("goimports", "-w", g.outPath).Run(); err != nil {
-		g.logger.Err(err).Msg("failed to run goimports")
+	var outBuf bytes.Buffer
+	if err := g.template.Execute(&outBuf, tdata); err != nil {
+		return err
 	}
 
-	if err := tf.Close(); err != nil {
-		g.logger.Err(err).Msg("failed to close output file")
+	formattedData, err := imports.Process(g.outPath, outBuf.Bytes(), &imports.Options{
+		AllErrors: true,
+		Comments:  true,
+	})
+
+	goOutputFile, err := os.Create(g.outPath)
+	if err != nil {
+		panic(err)
+	}
+
+	_, err = goOutputFile.Write(formattedData)
+	if err != nil {
+		panic(err)
 	}
 
 	return nil
