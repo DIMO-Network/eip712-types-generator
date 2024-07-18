@@ -17,15 +17,11 @@ import (
 )
 
 //go:embed types.tmpl
-var structTemplate string
+var packageTemplate string
 
 const (
-	// DefaultPackageName is the default package name for the generated Go file
-	DefaultPackageName = "eip712_types"
-	// DefaultOutFile is the default output file for the generated Go file
-	DefaultOutFile = "eip712_types.go"
 	// DefaultOutDir is the default output directory for the generated Go file
-	DefaultOutDir = "../../output"
+	DefaultOutDir = "../../types"
 	// DefaultFilePath is the default path to eip-712 types json
 	DefaultFilePath = "../../types/eip712_types.json"
 )
@@ -46,7 +42,7 @@ func New(logger zerolog.Logger, pkg, path, outDir, outFile string) (*Generator, 
 		}
 	}
 
-	tmpl, err := template.New("").Parse(structTemplate)
+	tmpl, err := template.New("").Parse(packageTemplate)
 	if err != nil {
 		return nil, err
 	}
@@ -55,12 +51,12 @@ func New(logger zerolog.Logger, pkg, path, outDir, outFile string) (*Generator, 
 		logger:   logger,
 		pkg:      pkg,
 		inPath:   path,
-		outPath:  filepath.Join(filepath.Clean(outDir), filepath.Clean(outFile)),
+		outPath:  filepath.Join(filepath.Clean(outDir), outFile),
 		template: tmpl,
 	}, nil
 }
 
-type TemplData struct {
+type TemplateData struct {
 	PackageName string
 	Methods     []Method
 }
@@ -82,38 +78,37 @@ type Method struct {
 func (g *Generator) Execute(ctx context.Context) error {
 	typesJSON, err := os.ReadFile(filepath.Clean(g.inPath))
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to read eip712 types json: %w", err)
 	}
 
 	var eip712Types map[string][]Arguments
 	if err := json.Unmarshal(typesJSON, &eip712Types); err != nil {
-		return err
+		return fmt.Errorf("failed to unmarshal eip712 types json: %w", err)
 	}
 
-	tdata := TemplData{
+	templateData := TemplateData{
 		PackageName: g.pkg,
 	}
 
-	for k, v := range eip712Types {
+	for methodName, argArray := range eip712Types {
 		m := Method{
-			Name:  k,
-			Alias: strings.ToLower(k[:1]),
+			Name:  methodName,
+			Alias: strings.ToLower(methodName[:1]),
 		}
 
-		for _, arg := range v {
+		for _, arg := range argArray {
 			arg.CapitalName = strings.ToUpper(arg.Name[:1]) + arg.Name[1:]
 			arg.GoType = solidityToGolangTypesMap[arg.Type]
 			arg.TypeDataStructMethod = fmt.Sprintf(typedDataStructMap[arg.Type], m.Alias, arg.CapitalName)
 			m.Arguments = append(m.Arguments, arg)
 		}
 
-		tdata.Methods = append(tdata.Methods, m)
-
+		templateData.Methods = append(templateData.Methods, m)
 	}
 
 	var outBuf bytes.Buffer
-	if err := g.template.Execute(&outBuf, tdata); err != nil {
-		return err
+	if err := g.template.Execute(&outBuf, templateData); err != nil {
+		return fmt.Errorf("failed to execute eip712 types template: %w", err)
 	}
 
 	formattedData, err := imports.Process(g.outPath, outBuf.Bytes(), &imports.Options{
@@ -123,14 +118,14 @@ func (g *Generator) Execute(ctx context.Context) error {
 
 	goOutputFile, err := os.Create(g.outPath)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to create output file: %w", err)
 	}
 
-	_, err = goOutputFile.Write(formattedData)
-	if err != nil {
-		panic(err)
+	if _, err = goOutputFile.Write(formattedData); err != nil {
+		return fmt.Errorf("failed to write to output file: %w", err)
 	}
 
+	g.logger.Info().Msgf("successfully generated eip712 types at: %s", g.outPath)
 	return nil
 }
 

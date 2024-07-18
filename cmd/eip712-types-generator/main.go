@@ -5,7 +5,6 @@ import (
 	"eip712-types-generator/internal/generator"
 	_ "embed"
 	"flag"
-	"fmt"
 	"os"
 
 	_ "embed"
@@ -13,13 +12,16 @@ import (
 	"github.com/rs/zerolog"
 )
 
-//go:generate go run . -package=eip712_types -out=eip712_types.go -outDir=../../output -filepath=../../types/eip712_types.json generate
+const (
+	packageName = "eip712_types"
+	fileName    = "eip712_types.go"
+)
+
+//go:generate go run . -output=../../types -filepath=../../types/eip712_types.json generate
 func main() {
 	ctx := context.Background()
-	var packageName, outFile, outDir, inFile string
-	flag.StringVar(&packageName, "package", generator.DefaultPackageName, "Name of the package to generate")
-	flag.StringVar(&outFile, "out", generator.DefaultOutFile, "Output file for the generated Go file")
-	flag.StringVar(&outDir, "outDir", generator.DefaultOutDir, "Output directory for the generated Go file")
+	var outDir, inFile string
+	flag.StringVar(&outDir, "output", generator.DefaultOutDir, "Output directory for the generated Go file")
 	flag.StringVar(&inFile, "filepath", generator.DefaultFilePath, "Path to eip-712 types json is empty")
 	flag.Parse()
 
@@ -28,16 +30,15 @@ func main() {
 		Str("app", "eip712-types-generator").
 		Logger()
 
-	generator, err := generator.New(logger, packageName, inFile, outDir, outFile)
+	generator, err := generator.New(logger, packageName, inFile, outDir, fileName)
 	if err != nil {
 		logger.Err(err).Msg("failed to create generator")
 		os.Exit(1)
 	}
 
 	if err := generator.Execute(ctx); err != nil {
-		fmt.Println(err)
-		logger.Fatal().Err(err)
-		return
+		logger.Err(err).Msg("failed to execute generator")
+		os.Exit(1)
 	}
 
 }
