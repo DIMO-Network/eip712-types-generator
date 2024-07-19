@@ -2,7 +2,9 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 
 	"github.com/DIMO-Network/eip712-types-generator/internal/generator"
@@ -22,19 +24,9 @@ func main() {
 
 	typesPath := os.Args[1]
 
-	typesInfo, err := os.Stat(typesPath)
+	rawTypes, mode, err := loadTypeFile(typesPath)
 	if err != nil {
-		logger.Fatal().Err(err).Msgf("Couldn't stat file %q.", typesPath)
-	}
-
-	typesFile, err := os.Open(typesPath)
-	if err != nil {
-		logger.Fatal().Err(err).Msgf("Couldn't open file %q.", typesPath)
-	}
-
-	in, err := io.ReadAll(typesFile)
-	if err != nil {
-		logger.Fatal().Err(err).Msgf("Couldn't read file %q.", typesPath)
+		logger.Fatal().Err(err).Msgf("Couldn't load types from file %q.", typesPath)
 	}
 
 	g, err := generator.New()
@@ -42,7 +34,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to create generator.")
 	}
 
-	out, err := g.Execute(*packageName, in)
+	out, err := g.Execute(*packageName, rawTypes)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to execute template.")
 	}
@@ -53,9 +45,28 @@ func main() {
 			logger.Fatal().Err(err).Msg("Couldn't write to stdout.")
 		}
 	} else {
-		err := os.WriteFile(*outPath, out, typesInfo.Mode())
+		err := os.WriteFile(*outPath, out, mode)
 		if err != nil {
 			logger.Fatal().Err(err).Msgf("Couldn't write to file %q.", *outPath)
 		}
 	}
+}
+
+func loadTypeFile(path string) ([]byte, fs.FileMode, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("couldn't stat file: %w", err)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, 0, fmt.Errorf("couldn't open file: %w", err)
+	}
+
+	b, err := io.ReadAll(file)
+	if err != nil {
+		return nil, 0, fmt.Errorf("couldn't read file: %w", err)
+	}
+
+	return b, info.Mode(), nil
 }
