@@ -2,10 +2,8 @@ package generator
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/template"
 
@@ -24,23 +22,35 @@ const (
 	DefaultOutDir = "../../types"
 	// DefaultFilePath is the default path to eip-712 types json
 	DefaultFilePath = "../../types/eip712_types.json"
+	// DefaultPackageName is the default package name for the generated Go file
+	DefaultPackageName = "eip712_types"
+	// DefaultFileName is the default file name for the generated Go file
+	DefaultFileName = "eip712_types.go"
+)
+
+var (
+	solidityToGolangTypesMap = map[string]string{
+		"string[]": "[]string",
+		"uint256":  "*big.Int",
+		"address":  "common.Address",
+		"string":   "string",
+	}
+
+	typedDataStructMap = map[string]string{
+		"string[]": "anySlice(%s.%s)",
+		"uint256":  "hexutil.EncodeBig(%s.%s)",
+		"address":  "%s.%s.Hex()",
+		"string":   "%s.%s",
+	}
 )
 
 type Generator struct {
 	logger   zerolog.Logger
 	pkg      string
-	inPath   string
-	outPath  string
 	template *template.Template
 }
 
-func New(logger zerolog.Logger, pkg, path, outDir, outFile string) (*Generator, error) {
-	if err := os.Mkdir(filepath.Clean(outDir), 0700); os.IsNotExist(err) {
-		if err != nil {
-			logger.Err(err).Msg("failed to create output directory")
-			return nil, err
-		}
-	}
+func New(logger zerolog.Logger, pkg string) (*Generator, error) {
 
 	tmpl, err := template.New("").Parse(packageTemplate)
 	if err != nil {
@@ -50,8 +60,6 @@ func New(logger zerolog.Logger, pkg, path, outDir, outFile string) (*Generator, 
 	return &Generator{
 		logger:   logger,
 		pkg:      pkg,
-		inPath:   path,
-		outPath:  filepath.Join(filepath.Clean(outDir), outFile),
 		template: tmpl,
 	}, nil
 }
@@ -75,15 +83,10 @@ type Method struct {
 	Alias     string
 }
 
-func (g *Generator) Execute(ctx context.Context) error {
-	typesJSON, err := os.ReadFile(filepath.Clean(g.inPath))
-	if err != nil {
-		return fmt.Errorf("failed to read eip712 types json: %w", err)
-	}
-
+func (g *Generator) BuildTemplate(data []byte) ([]byte, error) {
 	var eip712Types map[string][]Arguments
-	if err := json.Unmarshal(typesJSON, &eip712Types); err != nil {
-		return fmt.Errorf("failed to unmarshal eip712 types json: %w", err)
+	if err := json.Unmarshal(data, &eip712Types); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal eip712 types json: %w", err)
 	}
 
 	templateData := TemplateData{
@@ -108,37 +111,25 @@ func (g *Generator) Execute(ctx context.Context) error {
 
 	var outBuf bytes.Buffer
 	if err := g.template.Execute(&outBuf, templateData); err != nil {
-		return fmt.Errorf("failed to execute eip712 types template: %w", err)
+		return nil, fmt.Errorf("failed to execute eip712 types template: %w", err)
 	}
+	return outBuf.Bytes(), nil
+}
 
-	formattedData, err := imports.Process(g.outPath, outBuf.Bytes(), &imports.Options{
+func (g *Generator) WriteToFile(data []byte, outPath string) error {
+	formattedData, err := imports.Process(outPath, data, &imports.Options{
 		AllErrors: true,
 		Comments:  true,
 	})
-
-	goOutputFile, err := os.Create(g.outPath)
 	if err != nil {
-		return fmt.Errorf("failed to create output file: %w", err)
+		return err
 	}
 
-	if _, err = goOutputFile.Write(formattedData); err != nil {
-		return fmt.Errorf("failed to write to output file: %w", err)
+	goOutputFile, err := os.Create(outPath)
+	if err != nil {
+		return err
 	}
 
-	g.logger.Info().Msgf("successfully generated eip712 types at: %s", g.outPath)
-	return nil
-}
-
-var solidityToGolangTypesMap = map[string]string{
-	"string[]": "[]string",
-	"uint256":  "*big.Int",
-	"address":  "common.Address",
-	"string":   "string",
-}
-
-var typedDataStructMap = map[string]string{
-	"string[]": "anySlice(%s.%s)",
-	"uint256":  "hexutil.EncodeBig(%s.%s)",
-	"address":  "%s.%s.Hex()",
-	"string":   "%s.%s",
+	_, err = goOutputFile.Write(formattedData)
+	return err
 }

@@ -1,44 +1,56 @@
 package main
 
 import (
-	"context"
 	"eip712-types-generator/internal/generator"
 	_ "embed"
 	"flag"
 	"os"
+	"path/filepath"
 
 	_ "embed"
 
 	"github.com/rs/zerolog"
 )
 
-const (
-	packageName = "eip712_types"
-	fileName    = "eip712_types.go"
-)
-
-//go:generate go run . -output=../../types -filepath=../../types/eip712_types.json generate
+//go:generate go run . -output=../../types -filepath=../../types/eip712_types.json
 func main() {
-	ctx := context.Background()
-	var outDir, inFile string
+	var outDir, inFile, packageName, fileName string
 	flag.StringVar(&outDir, "output", generator.DefaultOutDir, "Output directory for the generated Go file")
 	flag.StringVar(&inFile, "filepath", generator.DefaultFilePath, "Path to eip-712 types json is empty")
+	flag.StringVar(&packageName, "packageName", generator.DefaultPackageName, "Package name for the generated Go file")
+	flag.StringVar(&fileName, "fileName", generator.DefaultFileName, "Resulting file name for the generated Go file")
 	flag.Parse()
 
-	logger := zerolog.New(os.Stdout).With().
-		Timestamp().
-		Str("app", "eip712-types-generator").
-		Logger()
+	logger := zerolog.New(os.Stdout).With().Timestamp().Str("app", "eip712-types-generator").Logger()
 
-	generator, err := generator.New(logger, packageName, inFile, outDir, fileName)
+	if err := os.Mkdir(filepath.Clean(outDir), 0700); os.IsNotExist(err) {
+		logger.Err(err).Msg("failed to create output directory")
+		os.Exit(1)
+	}
+
+	typesJSON, err := os.ReadFile(filepath.Clean(inFile))
+	if err != nil {
+		logger.Err(err).Msg("failed to read types json")
+		os.Exit(1)
+	}
+
+	generator, err := generator.New(logger, packageName)
 	if err != nil {
 		logger.Err(err).Msg("failed to create generator")
 		os.Exit(1)
 	}
 
-	if err := generator.Execute(ctx); err != nil {
-		logger.Err(err).Msg("failed to execute generator")
+	templB, err := generator.BuildTemplate(typesJSON)
+	if err != nil {
+		logger.Err(err).Msg("failed to build template")
 		os.Exit(1)
 	}
 
+	out := filepath.Join(filepath.Clean(outDir), fileName)
+	if err := generator.WriteToFile(templB, out); err != nil {
+		logger.Err(err).Msg("failed to write to output file")
+		os.Exit(1)
+	}
+
+	logger.Info().Msgf("successfully generated eip712 types at: %s", out)
 }
