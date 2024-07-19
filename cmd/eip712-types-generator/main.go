@@ -2,51 +2,60 @@ package main
 
 import (
 	"flag"
+	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/DIMO-Network/eip712-types-generator/internal/generator"
 	"github.com/rs/zerolog"
 )
 
 func main() {
-	var outDir, inFile, packageName, fileName string
-	flag.StringVar(&outDir, "output", generator.DefaultOutDir, "Output directory for the generated Go file")
-	flag.StringVar(&inFile, "filepath", generator.DefaultFilePath, "Path to eip-712 types json is empty")
-	flag.StringVar(&packageName, "packageName", generator.DefaultPackageName, "Package name for the generated Go file")
-	flag.StringVar(&fileName, "fileName", generator.DefaultFileName, "Resulting file name for the generated Go file")
-	flag.Parse()
-
 	logger := zerolog.New(os.Stdout).With().Timestamp().Str("app", "eip712-types-generator").Logger()
 
-	if err := os.Mkdir(filepath.Clean(outDir), 0700); os.IsNotExist(err) {
-		logger.Err(err).Msg("failed to create output directory")
-		os.Exit(1)
+	if len(os.Args) == 1 {
+		logger.Fatal().Msg("Types file path required.")
 	}
 
-	typesJSON, err := os.ReadFile(filepath.Clean(inFile))
+	packageName := flag.String("package", "main", "Package name for the generated Go file.")
+	outPath := flag.String("outfile", "", "Output file for the generated code. If blank, then stdout will be used.")
+	flag.Parse()
+
+	typesPath := os.Args[1]
+
+	typesInfo, err := os.Stat(typesPath)
 	if err != nil {
-		logger.Err(err).Msg("failed to read types json")
-		os.Exit(1)
+		logger.Fatal().Err(err).Msgf("Couldn't stat file %q.", typesPath)
 	}
 
-	generator, err := generator.New(logger, packageName)
+	typesFile, err := os.Open(typesPath)
 	if err != nil {
-		logger.Err(err).Msg("failed to create generator")
-		os.Exit(1)
+		logger.Fatal().Err(err).Msgf("Couldn't open file %q.", typesPath)
 	}
 
-	templB, err := generator.BuildTemplate(typesJSON)
+	in, err := io.ReadAll(typesFile)
 	if err != nil {
-		logger.Err(err).Msg("failed to build template")
-		os.Exit(1)
+		logger.Fatal().Err(err).Msgf("Couldn't read file %q.", typesPath)
 	}
 
-	out := filepath.Join(filepath.Clean(outDir), fileName)
-	if err := generator.WriteToFile(templB, out); err != nil {
-		logger.Err(err).Msg("failed to write to output file")
-		os.Exit(1)
+	g, err := generator.New()
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to create generator.")
 	}
 
-	logger.Info().Msgf("successfully generated eip712 types at: %s", out)
+	out, err := g.Execute(*packageName, in)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to execute template.")
+	}
+
+	if *outPath == "" {
+		_, err := os.Stdin.Write(out)
+		if err != nil {
+			logger.Fatal().Err(err).Msg("Couldn't write to stdout.")
+		}
+	} else {
+		err := os.WriteFile(*outPath, out, typesInfo.Mode())
+		if err != nil {
+			logger.Fatal().Err(err).Msgf("Couldn't write to file %q.", *outPath)
+		}
+	}
 }

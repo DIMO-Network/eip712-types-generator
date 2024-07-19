@@ -2,134 +2,99 @@ package generator
 
 import (
 	"bytes"
+	_ "embed"
+	"encoding/json"
 	"fmt"
-	"os"
+	"go/format"
 	"strings"
 	"text/template"
-
-	_ "embed" // embed template file
-
-	"github.com/goccy/go-json"
-	"github.com/rs/zerolog"
-	"golang.org/x/tools/imports"
 )
 
 //go:embed types.tmpl
 var packageTemplate string
 
-const (
-	// DefaultOutDir is the default output directory for the generated Go file
-	DefaultOutDir = "../../types"
-	// DefaultFilePath is the default path to eip-712 types json
-	DefaultFilePath = "../../types/eip712_types.json"
-	// DefaultPackageName is the default package name for the generated Go file
-	DefaultPackageName = "eip712_types"
-	// DefaultFileName is the default file name for the generated Go file
-	DefaultFileName = "eip712_types.go"
-)
-
-var (
-	solidityToGolangTypesMap = map[string]string{
-		"string[]": "[]string",
-		"uint256":  "*big.Int",
-		"address":  "common.Address",
-		"string":   "string",
-	}
-
-	typedDataStructMap = map[string]string{
-		"string[]": "anySlice(%s.%s)",
-		"uint256":  "hexutil.EncodeBig(%s.%s)",
-		"address":  "%s.%s.Hex()",
-		"string":   "%s.%s",
-	}
-)
+var solidityToGoType = map[string]string{
+	"string[]": "[]string",
+	"uint256":  "*big.Int",
+	"address":  "common.Address",
+	"string":   "string",
+}
 
 type Generator struct {
-	logger   zerolog.Logger
-	pkg      string
 	template *template.Template
 }
 
-func New(logger zerolog.Logger, pkg string) (*Generator, error) {
-
+func New() (*Generator, error) {
 	tmpl, err := template.New("").Parse(packageTemplate)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("couldn't parse template: %w", err)
 	}
 
 	return &Generator{
-		logger:   logger,
-		pkg:      pkg,
 		template: tmpl,
 	}, nil
 }
 
-type TemplateData struct {
-	PackageName string
-	Methods     []Method
+type templateData struct {
+	Package string
+	Types   []Type
 }
 
-type Arguments struct {
-	CapitalName          string
-	Name                 string
-	Type                 string
-	GoType               string
-	TypeDataStructMethod string
+type Member struct {
+	Name   string `json:"name"`
+	Type   string `json:"type"`
+	GoName string `json:"-"`
+	GoType string `json:"-"`
 }
 
-type Method struct {
-	Name      string
-	Arguments []Arguments
-	Alias     string
+type Type struct {
+	Name    string
+	Members []Member
 }
 
-func (g *Generator) BuildTemplate(data []byte) ([]byte, error) {
-	var eip712Types map[string][]Arguments
+func (g *Generator) Execute(packageName string, data []byte) ([]byte, error) {
+	var eip712Types map[string][]Member
 	if err := json.Unmarshal(data, &eip712Types); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal eip712 types json: %w", err)
 	}
 
-	templateData := TemplateData{
-		PackageName: g.pkg,
+	templateData := templateData{
+		Package: packageName,
 	}
 
-	for methodName, argArray := range eip712Types {
-		m := Method{
-			Name:  methodName,
-			Alias: strings.ToLower(methodName[:1]),
+	for typeName, members := range eip712Types {
+		t := Type{
+			Name: typeName,
 		}
 
-		for _, arg := range argArray {
-			arg.CapitalName = strings.ToUpper(arg.Name[:1]) + arg.Name[1:]
-			arg.GoType = solidityToGolangTypesMap[arg.Type]
-			arg.TypeDataStructMethod = fmt.Sprintf(typedDataStructMap[arg.Type], m.Alias, arg.CapitalName)
-			m.Arguments = append(m.Arguments, arg)
+		for i, mem := range members {
+			if mem.Name == "" {
+				return nil, fmt.Errorf("type %s member at index %d has no name", typeName, i)
+			}
+
+			mem.GoName = strings.ToUpper(mem.Name[:1]) + mem.Name[1:]
+
+			gt, ok := solidityToGoType[mem.Type]
+			if !ok {
+				return nil, fmt.Errorf("type %s member %s has unsupported type %s", typeName, mem.Name, mem.Type)
+			}
+
+			mem.GoType = gt
+			t.Members = append(t.Members, mem)
 		}
 
-		templateData.Methods = append(templateData.Methods, m)
+		templateData.Types = append(templateData.Types, t)
 	}
 
-	var outBuf bytes.Buffer
-	if err := g.template.Execute(&outBuf, templateData); err != nil {
-		return nil, fmt.Errorf("failed to execute eip712 types template: %w", err)
+	var tmplOut bytes.Buffer
+	if err := g.template.Execute(&tmplOut, templateData); err != nil {
+		return nil, fmt.Errorf("failed to evaluate template: %w", err)
 	}
-	return outBuf.Bytes(), nil
-}
 
-func (g *Generator) WriteToFile(data []byte, outPath string) error {
-	formattedData, err := imports.Process(outPath, data, &imports.Options{
-		AllErrors: true,
-		Comments:  true,
-	})
+	out, err := format.Source(tmplOut.Bytes())
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("failed to format output file: %w", err)
 	}
 
-	goOutputFile, err := os.Create(outPath)
-	if err != nil {
-		return err
-	}
-
-	_, err = goOutputFile.Write(formattedData)
-	return err
+	return out, nil
 }
