@@ -115,6 +115,9 @@ func (g *Generator) Execute(ctx context.Context) error {
 		AllErrors: true,
 		Comments:  true,
 	})
+	if err != nil {
+		return fmt.Errorf("failed to format output data: %w", err)
+	}
 
 	goOutputFile, err := os.Create(g.outPath)
 	if err != nil {
