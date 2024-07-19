@@ -37,23 +37,23 @@ func New() (*Generator, error) {
 
 type templateData struct {
 	Package string
-	Types   []Type
+	Types   []typeDesc
 }
 
-type Member struct {
+type member struct {
 	Name   string `json:"name"`
 	Type   string `json:"type"`
 	GoName string `json:"-"`
 	GoType string `json:"-"`
 }
 
-type Type struct {
+type typeDesc struct {
 	Name    string
-	Members []Member
+	Members []member
 }
 
 func (g *Generator) Execute(packageName string, data []byte) ([]byte, error) {
-	var eip712Types map[string][]Member
+	var eip712Types map[string][]member
 	if err := json.Unmarshal(data, &eip712Types); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal eip712 types json: %w", err)
 	}
@@ -63,7 +63,7 @@ func (g *Generator) Execute(packageName string, data []byte) ([]byte, error) {
 	}
 
 	for typeName, members := range eip712Types {
-		t := Type{
+		t := typeDesc{
 			Name: typeName,
 		}
 
