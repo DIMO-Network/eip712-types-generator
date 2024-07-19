@@ -1,18 +1,14 @@
 package main
 
 import (
-	"eip712-types-generator/internal/generator"
-	_ "embed"
 	"flag"
 	"os"
 	"path/filepath"
 
-	_ "embed"
-
+	"github.com/DIMO-Network/eip712-types-generator/internal/generator"
 	"github.com/rs/zerolog"
 )
 
-//go:generate go run . -output=../../types -filepath=../../types/eip712_types.json
 func main() {
 	var outDir, inFile, packageName, fileName string
 	flag.StringVar(&outDir, "output", generator.DefaultOutDir, "Output directory for the generated Go file")

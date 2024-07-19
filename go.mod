@@ -1,11 +1,10 @@
-module eip712-types-generator
+module github.com/DIMO-Network/eip712-types-generator
 
 go 1.22.3
 
 require (
 	github.com/ethereum/go-ethereum v1.14.0
 	github.com/goccy/go-json v0.10.3
-	github.com/lib/pq v1.10.9
 	github.com/rs/zerolog v1.33.0
 	golang.org/x/tools v0.22.0
 )
