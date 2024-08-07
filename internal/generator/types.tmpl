@@ -31,7 +31,11 @@ func (t *{{.Name}}) Type() []apitypes.Type {
 func (t *{{ .Name}}) Message() apitypes.TypedDataMessage {
 	return apitypes.TypedDataMessage{
 		{{- range .Members}}
+		{{- if .ConvertFunc }}
+		"{{.Name}}": {{.ConvertFunc}}(t.{{.GoName}}),
+		{{- else }}
 		"{{.Name}}": t.{{.GoName}},
+		{{- end }}
 		{{- end}}
 	}
 }

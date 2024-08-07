@@ -18,9 +18,14 @@ func main() {
 		logger.Fatal().Msg("Types file path required.")
 	}
 
-	packageName := flag.String("package", "main", "Package name for the generated Go file.")
-	outPath := flag.String("outfile", "", "Output file for the generated code. If blank, then stdout will be used.")
-	flag.Parse()
+	fs := flag.NewFlagSet("optionals", flag.ContinueOnError)
+
+	packageName := fs.String("package", "main", "Package name for the generated Go file.")
+	outPath := fs.String("outfile", "", "Output file for the generated code. If blank, then stdout will be used.")
+
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		logger.Fatal().Err(err).Msgf("Failed to parse arguments.")
+	}
 
 	typesPath := os.Args[1]
 
@@ -40,7 +45,7 @@ func main() {
 	}
 
 	if *outPath == "" {
-		_, err := os.Stdin.Write(out)
+		_, err := os.Stdout.Write(out)
 		if err != nil {
 			logger.Fatal().Err(err).Msg("Couldn't write to stdout.")
 		}

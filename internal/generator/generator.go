@@ -13,12 +13,19 @@ import (
 //go:embed types.tmpl
 var packageTemplate string
 
-var solidityToGoType = map[string]string{
-	"string[]": "[]string",
-	"uint256":  "*big.Int",
-	"address":  "common.Address",
-	"string":   "string",
-}
+var (
+	solidityToGoType = map[string]string{
+		"string[]": "[]string",
+		"uint256":  "*big.Int",
+		"address":  "common.Address",
+		"string":   "string",
+	}
+
+	solidityToPresentationConverter = map[string]string{
+		"uint256": "(*big.Int).String",
+		"address": "common.Address.Hex",
+	}
+)
 
 type Generator struct {
 	template *template.Template
@@ -41,10 +48,11 @@ type templateData struct {
 }
 
 type member struct {
-	Name   string `json:"name"`
-	Type   string `json:"type"`
-	GoName string `json:"-"`
-	GoType string `json:"-"`
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	GoName      string `json:"-"`
+	GoType      string `json:"-"`
+	ConvertFunc string `json:"-"`
 }
 
 type typeDesc struct {
@@ -80,6 +88,8 @@ func (g *Generator) Execute(packageName string, data []byte) ([]byte, error) {
 			}
 
 			mem.GoType = gt
+			mem.ConvertFunc = solidityToPresentationConverter[mem.Type]
+
 			t.Members = append(t.Members, mem)
 		}
 
